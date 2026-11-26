@@ -82,6 +82,7 @@ interface ProductDetailPageProps {
   relatedVariants: SportProduct[];
   allProductsForValidation: SportProduct[];
   storageMode: 'database' | 'local';
+  backHref?: string;
 }
 
 export function ProductDetailPage({
@@ -90,6 +91,7 @@ export function ProductDetailPage({
   relatedVariants,
   allProductsForValidation,
   storageMode,
+  backHref = '/admin',
 }: ProductDetailPageProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -188,7 +190,7 @@ export function ProductDetailPage({
             <span className="text-neutral-500">Artículo no encontrado</span>
           </div>
           <Link
-            href="/"
+            href={backHref}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors"
           >
             <ArrowLeft size={14} />
@@ -205,7 +207,7 @@ export function ProductDetailPage({
               El artículo solicitado no existe o fue eliminado del catálogo.
             </p>
             <Link
-              href="/"
+              href={backHref}
               className="mt-5 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 transition-colors"
             >
               <ArrowLeft size={14} />
@@ -509,7 +511,7 @@ export function ProductDetailPage({
           return;
         }
         setVariants((prev) => prev.filter((v) => v.uid !== product.uid));
-        router.push('/');
+        router.push(backHref);
         router.refresh();
       } catch {
         setToast('Error de conexión al eliminar el producto.');
@@ -524,7 +526,7 @@ export function ProductDetailPage({
     } catch {
       // ignore
     }
-    router.push('/');
+    router.push(backHref);
   };
 
   const renderAvailability = () => {
@@ -569,11 +571,13 @@ export function ProductDetailPage({
       <header className="sticky top-0 z-20 h-16 bg-white border-b border-neutral-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Link
-            href="/"
+            href={backHref}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 -ml-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
             <ArrowLeft size={15} />
-            <span className="hidden sm:inline">Catálogo</span>
+            <span className="hidden sm:inline">
+              {backHref === '/mauricio' ? 'Espacio Mauricio' : 'Catálogo'}
+            </span>
           </Link>
           <span className="text-neutral-300 hidden sm:inline" aria-hidden="true">
             /

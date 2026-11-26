@@ -12,6 +12,7 @@ export const dynamic = 'force-dynamic';
 
 type PageProps = {
   params: Promise<{ identifier: string }>;
+  searchParams?: Promise<{ from?: string }>;
 };
 
 async function findProductByIdentifier(rawIdentifier: string): Promise<{
@@ -110,8 +111,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function ProductPage({ params }: PageProps) {
+export default async function ProductPage({ params, searchParams }: PageProps) {
   const { identifier } = await params;
+  const resolvedSearch = searchParams ? await searchParams : {};
+  const backHref = resolvedSearch?.from === 'mauricio' ? '/mauricio' : '/admin';
   const { product, relatedVariants, allProducts, storageMode } =
     await findProductByIdentifier(identifier);
 
@@ -122,6 +125,7 @@ export default async function ProductPage({ params }: PageProps) {
       relatedVariants={relatedVariants}
       allProductsForValidation={allProducts}
       storageMode={storageMode}
+      backHref={backHref}
     />
   );
 }

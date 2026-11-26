@@ -24,6 +24,7 @@ import {
   MinusCircle,
   RotateCcw,
   ArrowUpDown,
+  ArrowLeftRight,
 } from 'lucide-react';
 import {
   AVAILABILITY_LABELS,
@@ -927,6 +928,21 @@ export function CatalogApp() {
           <p className="pt-2 text-[11px] text-neutral-400 leading-relaxed border-t border-neutral-100">
             Esquema Meta Commerce adaptado sin obligatoriedad estricta.
           </p>
+          <div className="pt-2 border-t border-neutral-100 flex items-center justify-between gap-2">
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-600 hover:text-neutral-900 transition-colors"
+            >
+              <ArrowLeftRight size={13} />
+              Cambiar perfil
+            </Link>
+            <Link
+              href="/mauricio"
+              className="text-xs font-medium text-emerald-700 hover:text-emerald-800 transition-colors"
+            >
+              Modo Mauricio
+            </Link>
+          </div>
         </div>
       </aside>
 
@@ -981,6 +997,23 @@ export function CatalogApp() {
                 );
               })}
             </nav>
+            <div className="px-4 py-3 border-t border-neutral-200 flex items-center justify-between text-xs">
+              <Link
+                href="/"
+                onClick={() => setMobileMenuOpen(false)}
+                className="inline-flex items-center gap-1.5 font-medium text-neutral-600 hover:text-neutral-900"
+              >
+                <ArrowLeftRight size={13} />
+                Cambiar perfil
+              </Link>
+              <Link
+                href="/mauricio"
+                onClick={() => setMobileMenuOpen(false)}
+                className="font-medium text-emerald-700 hover:text-emerald-800"
+              >
+                Modo Mauricio
+              </Link>
+            </div>
           </aside>
         </div>
       )}
