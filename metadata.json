@@ -1,0 +1,6 @@
+{
+  "name": "FichaSport",
+  "description": "Gestor CRUD de catálogo de productos de marcas deportivas con atributos flexibles adaptados a Meta Commerce y exportación CSV.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
