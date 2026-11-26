@@ -9,6 +9,10 @@ import {
   AlertTriangle,
   ExternalLink,
   Check,
+  CheckCircle2,
+  ClipboardPaste,
+  Image as ImageIcon,
+  Trash2,
 } from 'lucide-react';
 import {
   AGE_GROUP_LABELS,
@@ -23,7 +27,6 @@ import {
   GENDER_LABELS,
   GenderValue,
   GOOGLE_CATEGORY_SUGGESTIONS,
-  LOCAL_GALLERY_IMAGES,
   SPORT_BRANDS,
   STYLE_SUGGESTIONS,
   SportProduct,
@@ -33,6 +36,7 @@ import {
   parsePriceParts,
   parseSaleDateRange,
   validateProductSoft,
+  validateWebpImageUrl,
 } from '@/lib/catalog-schema';
 import { ProductImage } from './ProductImage';
 
@@ -72,6 +76,13 @@ export function ProductFormDrawer({
   const [form, setForm] = useState<SportProduct>(initialProduct);
   const [activeTab, setActiveTab] = useState<FormSection>('esencial');
   const [tagDraft, setTagDraft] = useState('');
+  const [clipboardFeedback, setClipboardFeedback] = useState<string | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<{
+    url: string;
+    status: 'loaded' | 'error';
+  } | null>(null);
+  const [galleryUrlDraft, setGalleryUrlDraft] = useState('');
+  const [galleryUrlError, setGalleryUrlError] = useState<string | null>(null);
 
   // Estados auxiliares para precio y fechas de oferta
   const [priceAmount, setPriceAmount] = useState(initialPrice.amount);
@@ -94,8 +105,33 @@ export function ProductFormDrawer({
   }, [open, onClose]);
 
   const issues = useMemo(
-    () => validateProductSoft(form, existingProducts),
-    [form, existingProducts]
+    () =>
+      validateProductSoft(form, existingProducts, {
+        initialImageLink: mode === 'edit' ? initialProduct.image_link : '',
+        initialImages: mode === 'edit' ? initialProduct.images : [],
+      }),
+    [form, existingProducts, mode, initialProduct.image_link, initialProduct.images]
+  );
+
+  const imageValidation = useMemo(
+    () => validateWebpImageUrl(form.image_link),
+    [form.image_link]
+  );
+
+  const isUntouchedLegacyImage =
+    mode === 'edit' &&
+    !imageValidation.valid &&
+    imageValidation.isSafeUrl &&
+    form.image_link.trim() !== '' &&
+    form.image_link.trim() === initialProduct.image_link.trim();
+
+  const hasImageBlockingError = !imageValidation.valid && !isUntouchedLegacyImage;
+  const currentPreviewStatus =
+    previewStatus?.url === form.image_link.trim() ? previewStatus.status : null;
+
+  const galleryDraftValidation = useMemo(
+    () => validateWebpImageUrl(galleryUrlDraft),
+    [galleryUrlDraft]
   );
 
   const blockingErrors = issues.filter((i) => i.severity === 'error');
@@ -162,6 +198,82 @@ export function ProductFormDrawer({
     );
   };
 
+  const handleImageLinkChange = (value: string) => {
+    setClipboardFeedback(null);
+    updateField('image_link', value);
+  };
+
+  const handleImagePasteEvent = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData('text');
+    if (pasted) {
+      e.preventDefault();
+      handleImageLinkChange(pasted.trim());
+    }
+  };
+
+  const handlePasteFromClipboard = async (target: 'primary' | 'gallery') => {
+    setClipboardFeedback(null);
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
+      setClipboardFeedback(
+        'Pegá la URL directamente en el campo usando Ctrl+V o Cmd+V.'
+      );
+      return;
+    }
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) {
+        setClipboardFeedback('El portapapeles está vacío.');
+        return;
+      }
+      if (target === 'primary') {
+        handleImageLinkChange(text);
+      } else {
+        setGalleryUrlDraft(text);
+        setGalleryUrlError(null);
+      }
+    } catch {
+      setClipboardFeedback(
+        'El navegador bloqueó la lectura del portapapeles. Usá Ctrl+V o Cmd+V en el campo.'
+      );
+    }
+  };
+
+  const handleAddGalleryUrl = () => {
+    const clean = galleryUrlDraft.trim();
+    if (!clean) {
+      setGalleryUrlError('Pegá una URL .webp para agregarla a la galería.');
+      return;
+    }
+    const check = validateWebpImageUrl(clean);
+    if (!check.valid) {
+      setGalleryUrlError(
+        check.error || 'Solo se admiten imágenes en formato WebP compatible (.webp).'
+      );
+      return;
+    }
+
+    const currentImages = Array.isArray(form.images) ? form.images : [];
+    if (currentImages.includes(clean)) {
+      setGalleryUrlError('Esa URL ya está incluida en la galería del producto.');
+      return;
+    }
+
+    const nextImages = [...currentImages, clean];
+    setForm((prev) => ({
+      ...prev,
+      image_link: prev.image_link.trim() ? prev.image_link : clean,
+      images: nextImages,
+    }));
+    setGalleryUrlDraft('');
+    setGalleryUrlError(null);
+  };
+
+  const handleRemoveGalleryUrl = (urlToRemove: string) => {
+    const currentImages = Array.isArray(form.images) ? form.images : [];
+    const nextImages = currentImages.filter((u) => u !== urlToRemove);
+    updateField('images', nextImages);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (blockingErrors.length > 0) return;
@@ -172,6 +284,7 @@ export function ProductFormDrawer({
     onSave({
       ...form,
       id: finalSku,
+      image_link: form.image_link.trim(),
       updatedAt: now,
       createdAt: mode === 'create' ? now : form.createdAt,
     });
@@ -226,18 +339,29 @@ export function ProductFormDrawer({
           <div className="flex items-center gap-1 min-w-max">
             {SECTION_TABS.map((tab) => {
               const isActive = activeTab === tab.id;
+              const tabHasMediaError =
+                tab.id === 'media' &&
+                blockingErrors.some(
+                  (err) => err.field === 'image_link' || err.field === 'images'
+                );
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 ${
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 ${
                     isActive
                       ? 'border-emerald-700 text-emerald-800 bg-white rounded-t-md'
                       : 'border-transparent text-neutral-600 hover:text-neutral-900'
                   }`}
                 >
                   {tab.label}
+                  {tabHasMediaError && (
+                    <span
+                      className="w-1.5 h-1.5 rounded-full bg-red-600"
+                      aria-hidden="true"
+                    />
+                  )}
                 </button>
               );
             })}
@@ -342,6 +466,114 @@ export function ProductFormDrawer({
                   placeholder="Ej. Camiseta Manchester United Retro 1993-95 Negra - Cantona 7 - Umbro"
                   className={inputClass}
                 />
+              </div>
+
+              {/* Bloque directo para pegar URL de imagen WebP */}
+              <div className="p-3.5 rounded-xl bg-[#FAFAFA] border border-neutral-200/90 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="field-image-link-esencial"
+                    className="text-xs font-medium text-neutral-800 flex items-center gap-1.5"
+                  >
+                    <ImageIcon size={14} className="text-emerald-700" />
+                    URL de imagen principal{' '}
+                    <span className="text-neutral-400 font-normal">
+                      (formato WebP · opcional)
+                    </span>
+                  </label>
+                  <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-white border border-neutral-200 text-neutral-600">
+                    .webp
+                  </span>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <ProductImage
+                    src={imageValidation.isSafeUrl ? form.image_link : ''}
+                    alt={form.title || 'Vista previa'}
+                    brand={form.brand}
+                    size="md"
+                    className="w-16 h-16 rounded-lg shrink-0"
+                    onStatusChange={(status) =>
+                      setPreviewStatus({ url: form.image_link.trim(), status })
+                    }
+                  />
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className="flex gap-1.5">
+                      <input
+                        id="field-image-link-esencial"
+                        type="text"
+                        inputMode="url"
+                        value={form.image_link}
+                        onChange={(e) => handleImageLinkChange(e.target.value)}
+                        onPaste={handleImagePasteEvent}
+                        placeholder="Pegá una URL directa (ej. https://sitio.com/camiseta.webp)"
+                        aria-invalid={hasImageBlockingError}
+                        className={`${inputClass} text-xs font-mono ${
+                          hasImageBlockingError
+                            ? 'border-red-400 focus:border-red-600 focus:ring-red-600/15'
+                            : !imageValidation.isEmpty && imageValidation.valid
+                              ? 'border-emerald-300'
+                              : ''
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handlePasteFromClipboard('primary')}
+                        title="Pegar URL desde el portapapeles"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-100 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+                      >
+                        <ClipboardPaste size={14} />
+                        Pegar
+                      </button>
+                      {form.image_link.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => handleImageLinkChange('')}
+                          title="Quitar URL de imagen"
+                          aria-label="Quitar URL de imagen"
+                          className="p-2 text-neutral-400 hover:text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-100 transition-colors shrink-0"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {hasImageBlockingError ? (
+                      <p className="flex items-start gap-1.5 text-[11px] text-red-700">
+                        <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                        <span>{imageValidation.error}</span>
+                      </p>
+                    ) : isUntouchedLegacyImage ? (
+                      <p className="flex items-start gap-1.5 text-[11px] text-amber-800">
+                        <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                        <span>
+                          Imagen existente en formato anterior. Pegá una URL{' '}
+                          <span className="font-mono">.webp</span> si querés reemplazarla.
+                        </span>
+                      </p>
+                    ) : !imageValidation.isEmpty && imageValidation.valid ? (
+                      <p className="flex items-center gap-1.5 text-[11px] text-emerald-700">
+                        <CheckCircle2 size={13} className="shrink-0" />
+                        <span>
+                          {imageValidation.isInternalBinary
+                            ? 'Imagen almacenada en PostgreSQL'
+                            : currentPreviewStatus === 'error'
+                              ? 'URL WebP válida (la vista previa no respondió aún)'
+                              : 'Formato WebP compatible'}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-neutral-500">
+                        Acepta enlaces directos <span className="font-mono">.webp</span> o rutas con{' '}
+                        <span className="font-mono">format=webp</span>.
+                      </p>
+                    )}
+
+                    {clipboardFeedback && (
+                      <p className="text-[11px] text-neutral-600">{clipboardFeedback}</p>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div>
@@ -820,56 +1052,244 @@ export function ProductFormDrawer({
             <>
               <div className="flex flex-col sm:flex-row gap-4 items-start">
                 <ProductImage
-                  src={form.image_link}
+                  src={imageValidation.isSafeUrl ? form.image_link : ''}
                   alt={form.title || 'Vista previa del producto'}
                   brand={form.brand}
                   size="lg"
                   className="w-32 h-32 rounded-lg shrink-0"
+                  onStatusChange={(status) =>
+                    setPreviewStatus({ url: form.image_link.trim(), status })
+                  }
                 />
-                <div className="flex-1 w-full space-y-3">
+                <div className="flex-1 w-full space-y-2.5">
                   <div>
-                    <label htmlFor="field-image-link" className={labelClass}>
-                      URL de imagen principal <span className="text-neutral-400 font-normal">(opcional)</span>
-                    </label>
-                    <input
-                      id="field-image-link"
-                      type="text"
-                      value={form.image_link}
-                      onChange={(e) => updateField('image_link', e.target.value)}
-                      placeholder="https://... o seleccioná una foto local debajo"
-                      className={inputClass}
-                    />
-                    <p className={hintClass}>
-                      Formatos JPG, PNG o GIF (recomendado 500 × 500 px o superior).
-                    </p>
-                  </div>
-
-                  <div>
-                    <span className="block text-[11px] font-medium text-neutral-600 mb-1.5">
-                      Galería rápida local
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {LOCAL_GALLERY_IMAGES.map((img) => {
-                        const selected = form.image_link === img.url;
-                        return (
-                          <button
-                            key={img.url}
-                            type="button"
-                            onClick={() => updateField('image_link', img.url)}
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                              selected
-                                ? 'bg-emerald-700 text-white border-emerald-700'
-                                : 'bg-white text-neutral-600 border-neutral-200 hover:border-neutral-400'
-                            }`}
-                          >
-                            {selected && <Check size={12} />}
-                            {img.label}
-                          </button>
-                        );
-                      })}
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <label htmlFor="field-image-link" className="text-xs font-medium text-neutral-700">
+                        URL de imagen principal <span className="text-neutral-400 font-normal">(opcional)</span>
+                      </label>
+                      <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-600 border border-neutral-200/80">
+                        Solo WebP (.webp)
+                      </span>
                     </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        id="field-image-link"
+                        type="text"
+                        inputMode="url"
+                        value={form.image_link}
+                        onChange={(e) => handleImageLinkChange(e.target.value)}
+                        onPaste={handleImagePasteEvent}
+                        placeholder="https://cdn.ejemplo.com/camiseta.webp"
+                        aria-invalid={hasImageBlockingError}
+                        className={`${inputClass} font-mono text-xs ${
+                          hasImageBlockingError
+                            ? 'border-red-400 focus:border-red-600 focus:ring-red-600/15'
+                            : !imageValidation.isEmpty && imageValidation.valid
+                              ? 'border-emerald-300'
+                              : ''
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handlePasteFromClipboard('primary')}
+                        title="Pegar URL desde el portapapeles"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+                      >
+                        <ClipboardPaste size={14} />
+                        Pegar URL
+                      </button>
+                      {form.image_link.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => handleImageLinkChange('')}
+                          title="Quitar URL"
+                          aria-label="Quitar URL de imagen principal"
+                          className="p-2 text-neutral-400 hover:text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors shrink-0"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {hasImageBlockingError ? (
+                      <p className="flex items-start gap-1.5 text-[11px] text-red-700 mt-1.5">
+                        <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                        <span>{imageValidation.error}</span>
+                      </p>
+                    ) : isUntouchedLegacyImage ? (
+                      <p className="flex items-start gap-1.5 text-[11px] text-amber-800 mt-1.5">
+                        <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                        <span>
+                          La imagen actual no es .webp. Podés conservarla o pegar una nueva URL WebP (.webp).
+                        </span>
+                      </p>
+                    ) : !imageValidation.isEmpty && imageValidation.valid ? (
+                      <p className="flex items-center gap-1.5 text-[11px] text-emerald-700 mt-1.5">
+                        <CheckCircle2 size={13} className="shrink-0" />
+                        <span>
+                          {imageValidation.isInternalBinary
+                            ? 'Imagen almacenada en PostgreSQL.'
+                            : currentPreviewStatus === 'error'
+                              ? 'Formato WebP validado, pero la imagen remota no pudo cargarse en la vista previa.'
+                              : 'Formato WebP compatible verificado.'}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className={hintClass}>
+                        Pegá una URL directa en formato WebP (<span className="font-mono">.webp</span> o parámetro <span className="font-mono">format=webp</span>).
+                      </p>
+                    )}
+
+                    {clipboardFeedback && (
+                      <p className="text-[11px] text-neutral-600 mt-1">{clipboardFeedback}</p>
+                    )}
                   </div>
                 </div>
+              </div>
+
+              {/* Galería de imágenes del producto + agregar URL .webp */}
+              <div className="pt-3 border-t border-neutral-200/80 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-semibold text-neutral-900">
+                      Galería de URLs adicionales (WebP)
+                    </h3>
+                    <p className={hintClass}>
+                      Agregá más vistas del artículo pegando URLs en formato <span className="font-mono">.webp</span>.
+                    </p>
+                  </div>
+                  {Array.isArray(form.images) && form.images.length > 0 && (
+                    <span className="text-[11px] font-mono tabular-nums text-neutral-500">
+                      {form.images.length} {form.images.length === 1 ? 'imagen' : 'imágenes'}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-1.5">
+                  <input
+                    id="field-gallery-webp-url"
+                    type="text"
+                    inputMode="url"
+                    value={galleryUrlDraft}
+                    onChange={(e) => {
+                      setGalleryUrlDraft(e.target.value);
+                      if (galleryUrlError) setGalleryUrlError(null);
+                    }}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData.getData('text');
+                      if (pasted) {
+                        e.preventDefault();
+                        setGalleryUrlDraft(pasted.trim());
+                        setGalleryUrlError(null);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddGalleryUrl();
+                      }
+                    }}
+                    placeholder="https://cdn.ejemplo.com/vista-espalda.webp"
+                    className={`${inputClass} font-mono text-xs ${
+                      galleryUrlDraft.trim() && !galleryDraftValidation.valid
+                        ? 'border-red-400 focus:border-red-600 focus:ring-red-600/15'
+                        : ''
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handlePasteFromClipboard('gallery')}
+                    title="Pegar URL desde el portapapeles"
+                    className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-neutral-700 bg-white border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <ClipboardPaste size={14} />
+                    Pegar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddGalleryUrl}
+                    className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Plus size={14} />
+                    Agregar
+                  </button>
+                </div>
+
+                {(galleryUrlError ||
+                  (galleryUrlDraft.trim() && !galleryDraftValidation.valid)) && (
+                  <p className="flex items-start gap-1.5 text-[11px] text-red-700">
+                    <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                    <span>
+                      {galleryUrlError || galleryDraftValidation.error}
+                    </span>
+                  </p>
+                )}
+
+                {Array.isArray(form.images) && form.images.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
+                    {form.images.map((url, idx) => {
+                      const isCover = form.image_link.trim() === url.trim();
+                      const check = validateWebpImageUrl(url);
+                      const isNewUrl = !(initialProduct.images ?? []).includes(url);
+                      return (
+                        <div
+                          key={`${url}-${idx}`}
+                          className={`group relative flex items-center gap-2 p-2 rounded-lg border transition-colors ${
+                            isCover
+                              ? 'border-emerald-600 bg-emerald-50/40'
+                              : 'border-neutral-200 bg-white'
+                          }`}
+                        >
+                          <ProductImage
+                            src={check.isSafeUrl ? url : ''}
+                            alt={`Imagen ${idx + 1}`}
+                            size="sm"
+                            className="w-10 h-10 rounded shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className="text-[11px] font-mono text-neutral-700 truncate"
+                              title={url}
+                            >
+                              {url.split(/[?#]/)[0]?.split('/').pop() || url}
+                            </p>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              {isCover ? (
+                                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-700">
+                                  <Check size={10} />
+                                  Portada
+                                </span>
+                              ) : check.valid ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleImageLinkChange(url)}
+                                  className="text-[10px] font-medium text-neutral-600 hover:text-emerald-700 underline underline-offset-2"
+                                >
+                                  Usar de portada
+                                </button>
+                              ) : (
+                                <span className="text-[10px] text-amber-700">
+                                  Legada
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {isNewUrl && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveGalleryUrl(url)}
+                              title="Quitar URL agregada"
+                              aria-label="Quitar URL de galería"
+                              className="p-1 text-neutral-400 hover:text-red-600 transition-colors shrink-0"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div>

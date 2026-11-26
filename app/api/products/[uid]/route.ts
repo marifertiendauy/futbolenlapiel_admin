@@ -6,7 +6,11 @@ import {
   isDatabaseConfigured,
   serializeProduct,
 } from '@/lib/prisma';
-import { normalizeProductForDb, productInputSchema } from '@/lib/product-validation';
+import {
+  normalizeProductForDb,
+  productInputSchema,
+  validateIncomingProductImagesWebp,
+} from '@/lib/product-validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,7 +80,53 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     }
 
     const prisma = await ensureDatabaseReady();
-    const { productData } = normalizeProductForDb(parsed.data);
+    const existing = await prisma.product.findUnique({
+      where: { uid },
+      select: {
+        uid: true,
+        image_link: true,
+        images: {
+          select: {
+            id: true,
+            url: true,
+            position: true,
+          },
+          orderBy: { position: 'asc' },
+        },
+      },
+    });
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: 'El producto que intentás editar no existe.', code: 'NOT_FOUND' },
+        { status: 404 }
+      );
+    }
+
+    const existingAllowedUrls = new Set<string>();
+    if (existing.image_link.trim()) {
+      existingAllowedUrls.add(existing.image_link.trim());
+    }
+    for (const img of existing.images) {
+      if (img.url.trim()) existingAllowedUrls.add(img.url.trim());
+    }
+
+    const webpError = validateIncomingProductImagesWebp(
+      parsed.data.image_link,
+      parsed.data.images,
+      existingAllowedUrls
+    );
+    if (webpError) {
+      return NextResponse.json(
+        {
+          error: webpError,
+          code: 'INVALID_IMAGE_FORMAT',
+        },
+        { status: 400 }
+      );
+    }
+
+    const { productData, imageUrls } = normalizeProductForDb(parsed.data);
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.product.update({
@@ -85,7 +135,28 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       });
 
       const nextCoverUrl = productData.image_link.trim();
-      if (nextCoverUrl && !nextCoverUrl.startsWith('/api/images/')) {
+      const coverChanged = nextCoverUrl !== existing.image_link.trim();
+
+      if (nextCoverUrl && nextCoverUrl.startsWith('/api/images/')) {
+        const match = nextCoverUrl.match(/^\/api\/images\/([a-zA-Z0-9_-]+)/);
+        const binaryId = match?.[1];
+        if (binaryId && coverChanged) {
+          const targetBinary = await tx.productImage.findFirst({
+            where: { id: binaryId, productId: uid },
+            select: { id: true },
+          });
+          if (targetBinary) {
+            await tx.productImage.updateMany({
+              where: { productId: uid },
+              data: { isCover: false },
+            });
+            await tx.productImage.update({
+              where: { id: targetBinary.id },
+              data: { isCover: true, position: 0 },
+            });
+          }
+        }
+      } else if (nextCoverUrl) {
         const existingCover = await tx.productImage.findUnique({
           where: {
             productId_url: {
@@ -99,7 +170,10 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
         if (!existingCover) {
           await tx.productImage.updateMany({
             where: { productId: uid },
-            data: { isCover: false },
+            data: {
+              isCover: false,
+              position: { increment: 1 },
+            },
           });
           await tx.productImage.create({
             data: {
@@ -110,6 +184,50 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
               isCover: true,
             },
           });
+        } else if (coverChanged) {
+          await tx.productImage.updateMany({
+            where: { productId: uid },
+            data: { isCover: false },
+          });
+          await tx.productImage.update({
+            where: { id: existingCover.id },
+            data: { isCover: true, position: 0 },
+          });
+        }
+      }
+
+      // Agregar nuevas URLs WebP de galería sin afectar imágenes binarias existentes
+      if (imageUrls.length > 0) {
+        const currentImages = await tx.productImage.findMany({
+          where: { productId: uid },
+          select: { url: true, position: true },
+          orderBy: { position: 'asc' },
+        });
+        const currentUrlSet = new Set(currentImages.map((img) => img.url));
+        let nextPos =
+          currentImages.length > 0
+            ? Math.max(...currentImages.map((img) => img.position)) + 1
+            : 0;
+
+        for (const candidateUrl of imageUrls) {
+          if (
+            !candidateUrl ||
+            candidateUrl.startsWith('/api/images/') ||
+            currentUrlSet.has(candidateUrl)
+          ) {
+            continue;
+          }
+          currentUrlSet.add(candidateUrl);
+          await tx.productImage.create({
+            data: {
+              productId: uid,
+              url: candidateUrl,
+              fileName: candidateUrl.split(/[?#]/)[0]?.split('/').pop() || '',
+              position: nextPos,
+              isCover: nextPos === 0 && !nextCoverUrl,
+            },
+          });
+          nextPos += 1;
         }
       }
 

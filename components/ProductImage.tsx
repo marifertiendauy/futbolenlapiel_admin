@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Shirt } from 'lucide-react';
+import { isSafeImageUrl } from '@/lib/catalog-schema';
 
 interface ProductImageProps {
   src?: string;
@@ -9,6 +10,7 @@ interface ProductImageProps {
   brand?: string;
   size?: 'sm' | 'md' | 'lg';
   className?: string;
+  onStatusChange?: (status: 'loaded' | 'error') => void;
 }
 
 export function ProductImage({
@@ -17,11 +19,13 @@ export function ProductImage({
   brand,
   size = 'sm',
   className = '',
+  onStatusChange,
 }: ProductImageProps) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   const cleanSrc = src?.trim() ?? '';
-  const showFallback = !cleanSrc || failedSrc === cleanSrc;
+  const isSafe = Boolean(cleanSrc) && isSafeImageUrl(cleanSrc);
+  const showFallback = !isSafe || failedSrc === cleanSrc;
 
   const iconSize = size === 'lg' ? 32 : size === 'md' ? 22 : 16;
 
@@ -50,7 +54,11 @@ export function ProductImage({
         src={cleanSrc}
         alt={alt}
         referrerPolicy="no-referrer"
-        onError={() => setFailedSrc(cleanSrc)}
+        onLoad={() => onStatusChange?.('loaded')}
+        onError={() => {
+          setFailedSrc(cleanSrc);
+          onStatusChange?.('error');
+        }}
         className="w-full h-full object-cover"
       />
     </div>

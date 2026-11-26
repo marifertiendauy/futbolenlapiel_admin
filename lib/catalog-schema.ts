@@ -44,7 +44,7 @@ export interface SportProduct {
   price: string;
   /** URL de la publicación o página del producto (opcional) */
   link: string;
-  /** URL de la imagen principal JPG/PNG/GIF >= 500x500 (opcional) */
+  /** URL de la imagen principal en formato WebP compatible (opcional) */
   image_link: string;
   /** Marca deportiva (Umbro, Nike, Adidas, Puma, etc., máx. 100) */
   brand: string;
@@ -163,7 +163,7 @@ export const META_CSV_COMMENTS = [
   '# Opcional (adaptado) | Condición del artículo. Valores: new; used.',
   '# Opcional | Precio con código de divisa ISO 4217 y punto decimal (ej. 2490.00 UYU).',
   '# Opcional (adaptado) | URL de la publicación o página del producto.',
-  '# Opcional (adaptado) | URL de imagen principal (JPG/PNG/GIF, mín. 500x500 px).',
+  '# Opcional (adaptado) | URL de imagen principal en formato WebP compatible (.webp).',
   '# Opcional (adaptado) | Marca deportiva del artículo. Límite: 100 caracteres.',
   '# Opcional | Categoría de productos de Google.',
   '# Opcional | Categoría de productos de Facebook.',
@@ -452,13 +452,156 @@ export interface SoftValidationIssue {
   severity: 'error' | 'warning';
 }
 
+export interface WebpUrlValidationResult {
+  valid: boolean;
+  isEmpty: boolean;
+  isSafeUrl: boolean;
+  isWebp: boolean;
+  isInternalBinary: boolean;
+  error?: string;
+}
+
+const INTERNAL_BINARY_IMAGE_REGEX = /^\/api\/images\/[a-zA-Z0-9_-]+(?:\?[^\s#]*)?$/;
+const WEBP_PATH_REGEX = /\.webp$/i;
+const WEBP_QUERY_KEYS = new Set(['format', 'fm', 'ext', 'output', 'f']);
+
+/**
+ * Verifica que una URL de imagen use un esquema seguro (http/https o ruta relativa /...)
+ * evitando esquemas peligrosos (javascript:, data:, //, espacios o caracteres de control).
+ */
+export function isSafeImageUrl(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  if (/[\s\u0000-\u001F\u007F]/.test(trimmed)) return false;
+  if (trimmed.startsWith('/')) {
+    return !trimmed.startsWith('//');
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Valida que una URL de imagen sea segura y corresponda a un formato WebP compatible.
+ * Acepta:
+ *  - Cadena vacía (los campos son opcionales)
+ *  - Imágenes binarias internas almacenadas en PostgreSQL (/api/images/<id>)
+ *  - URLs http(s) o rutas relativas cuya ruta termine en .webp (ignorando query/hash)
+ *  - URLs de CDNs con parámetro o transformación explícita de formato WebP (format=webp, fm=webp, f_webp)
+ */
+export function validateWebpImageUrl(raw: string): WebpUrlValidationResult {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {
+      valid: true,
+      isEmpty: true,
+      isSafeUrl: true,
+      isWebp: true,
+      isInternalBinary: false,
+    };
+  }
+
+  if (!isSafeImageUrl(trimmed)) {
+    return {
+      valid: false,
+      isEmpty: false,
+      isSafeUrl: false,
+      isWebp: false,
+      isInternalBinary: false,
+      error: 'Ingresá una URL de imagen válida (https://... o ruta relativa /...).',
+    };
+  }
+
+  if (INTERNAL_BINARY_IMAGE_REGEX.test(trimmed)) {
+    return {
+      valid: true,
+      isEmpty: false,
+      isSafeUrl: true,
+      isWebp: true,
+      isInternalBinary: true,
+    };
+  }
+
+  let pathname = '';
+  let searchParams: URLSearchParams | null = null;
+  try {
+    const parsed = trimmed.startsWith('/')
+      ? new URL(trimmed, 'https://fichasport.local')
+      : new URL(trimmed);
+    pathname = parsed.pathname;
+    searchParams = parsed.searchParams;
+  } catch {
+    return {
+      valid: false,
+      isEmpty: false,
+      isSafeUrl: false,
+      isWebp: false,
+      isInternalBinary: false,
+      error: 'La URL de imagen no tiene un formato válido.',
+    };
+  }
+
+  const decodedPath = (() => {
+    try {
+      return decodeURIComponent(pathname);
+    } catch {
+      return pathname;
+    }
+  })();
+
+  const hasWebpExtension = WEBP_PATH_REGEX.test(decodedPath);
+  const hasWebpPathTransform = /(?:^|[\/,])f_webp(?:[\/,]|$)/i.test(decodedPath);
+
+  let hasWebpQueryParam = false;
+  if (searchParams) {
+    for (const [key, value] of searchParams.entries()) {
+      const k = key.toLowerCase();
+      const v = value.trim().toLowerCase();
+      if (WEBP_QUERY_KEYS.has(k) && v === 'webp') {
+        hasWebpQueryParam = true;
+        break;
+      }
+    }
+  }
+
+  if (hasWebpExtension || hasWebpPathTransform || hasWebpQueryParam) {
+    return {
+      valid: true,
+      isEmpty: false,
+      isSafeUrl: true,
+      isWebp: true,
+      isInternalBinary: false,
+    };
+  }
+
+  return {
+    valid: false,
+    isEmpty: false,
+    isSafeUrl: true,
+    isWebp: false,
+    isInternalBinary: false,
+    error: 'Formato no compatible: la URL de imagen debe estar en formato WebP (.webp).',
+  };
+}
+
+export interface ValidateProductSoftOptions {
+  /** URL original del producto en modo edición para no bloquear imágenes legadas sin cambios */
+  initialImageLink?: string;
+  /** URLs originales de galería en modo edición */
+  initialImages?: string[];
+}
+
 /**
  * Validación flexible: nunca bloquea por campos vacíos ("sin valores obligatorios"),
  * solo controla límites de caracteres y formato cuando el campo tiene contenido.
  */
 export function validateProductSoft(
   product: SportProduct,
-  existingProducts: SportProduct[]
+  existingProducts: SportProduct[],
+  options?: ValidateProductSoftOptions
 ): SoftValidationIssue[] {
   const issues: SoftValidationIssue[] = [];
 
@@ -507,6 +650,57 @@ export function validateProductSoft(
       message: 'La marca no puede superar los 100 caracteres.',
       severity: 'error',
     });
+  }
+
+  const trimmedImage = product.image_link.trim();
+  if (trimmedImage) {
+    const imageCheck = validateWebpImageUrl(trimmedImage);
+    if (!imageCheck.valid) {
+      const initialImg = options?.initialImageLink?.trim();
+      const isUntouchedLegacy =
+        imageCheck.isSafeUrl &&
+        initialImg !== undefined &&
+        initialImg !== '' &&
+        trimmedImage === initialImg;
+
+      if (isUntouchedLegacy) {
+        issues.push({
+          field: 'image_link',
+          message:
+            'La imagen actual no es .webp. Podés conservarla o pegar una nueva URL en formato WebP (.webp).',
+          severity: 'warning',
+        });
+      } else {
+        issues.push({
+          field: 'image_link',
+          message:
+            imageCheck.error ||
+            'La URL de imagen principal debe ser un formato WebP compatible (.webp).',
+          severity: 'error',
+        });
+      }
+    }
+  }
+
+  if (Array.isArray(product.images) && product.images.length > 0) {
+    const initialGallerySet = new Set(
+      (options?.initialImages ?? []).map((u) => u.trim()).filter(Boolean)
+    );
+    const invalidNewGalleryUrl = product.images.find((rawUrl) => {
+      const clean = rawUrl.trim();
+      if (!clean) return false;
+      const check = validateWebpImageUrl(clean);
+      if (check.valid) return false;
+      if (check.isSafeUrl && initialGallerySet.has(clean)) return false;
+      return true;
+    });
+    if (invalidNewGalleryUrl) {
+      issues.push({
+        field: 'images',
+        message: 'Todas las nuevas URLs de la galería deben estar en formato WebP compatible (.webp).',
+        severity: 'error',
+      });
+    }
   }
 
   if (product.price.trim() && !/^\d+(?:\.\d{1,2})?\s+[A-Z]{3}$/.test(product.price.trim())) {

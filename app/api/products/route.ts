@@ -7,7 +7,11 @@ import {
   isDatabaseConfigured,
   serializeProduct,
 } from '@/lib/prisma';
-import { normalizeProductForDb, productInputSchema } from '@/lib/product-validation';
+import {
+  normalizeProductForDb,
+  productInputSchema,
+  validateIncomingProductImagesWebp,
+} from '@/lib/product-validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +71,20 @@ export async function POST(req: NextRequest) {
         {
           error: parsed.error.issues[0]?.message || 'Datos de producto inválidos.',
           code: 'VALIDATION_ERROR',
+        },
+        { status: 400 }
+      );
+    }
+
+    const webpError = validateIncomingProductImagesWebp(
+      parsed.data.image_link,
+      parsed.data.images
+    );
+    if (webpError) {
+      return NextResponse.json(
+        {
+          error: webpError,
+          code: 'INVALID_IMAGE_FORMAT',
         },
         { status: 400 }
       );

@@ -1,16 +1,53 @@
 import { z } from 'zod';
-import { generateSku } from './catalog-schema';
+import {
+  generateSku,
+  isSafeImageUrl,
+  validateWebpImageUrl,
+} from './catalog-schema';
 
 function isSafeUrlOrEmpty(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) return true;
-  if (trimmed.startsWith('/')) return !trimmed.startsWith('//');
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
+  return isSafeImageUrl(value);
+}
+
+export function validateIncomingProductImagesWebp(
+  imageLink: string,
+  images?: string[],
+  existingAllowedUrls?: Set<string>
+): string | null {
+  const cleanCover = imageLink.trim();
+  if (cleanCover) {
+    const check = validateWebpImageUrl(cleanCover);
+    if (!check.valid) {
+      const allowedLegacy =
+        check.isSafeUrl && existingAllowedUrls?.has(cleanCover);
+      if (!allowedLegacy) {
+        return (
+          check.error ||
+          'La URL de imagen principal debe estar en formato WebP compatible (.webp).'
+        );
+      }
+    }
   }
+
+  if (Array.isArray(images)) {
+    for (const rawUrl of images) {
+      const clean = rawUrl.trim();
+      if (!clean) continue;
+      const check = validateWebpImageUrl(clean);
+      if (!check.valid) {
+        const allowedLegacy =
+          check.isSafeUrl && existingAllowedUrls?.has(clean);
+        if (!allowedLegacy) {
+          return (
+            check.error ||
+            'Todas las URLs de imagen nuevas deben estar en formato WebP compatible (.webp).'
+          );
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 const safeUrlField = z
